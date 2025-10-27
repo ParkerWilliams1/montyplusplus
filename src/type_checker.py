@@ -88,6 +88,8 @@ class TypeChecker:
     def check(self, node: Node):
         match node:
             case Program():
+                if not node.statements:
+                    return None
                 for stmt in node.statements:
                     self.check(stmt)
                 return None
