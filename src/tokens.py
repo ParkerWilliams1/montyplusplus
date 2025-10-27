@@ -18,6 +18,9 @@ class TokenType(Enum):
     IDENTIFIER = auto()
     NUMBER = auto()
     STRING = auto()
+    BOOL = auto()
+    CHAR = auto()
+    FLOAT = auto()
 
     # Operators
     PLUS = auto()
