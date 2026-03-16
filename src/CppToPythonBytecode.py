@@ -1,98 +1,326 @@
+"""
+CppToPythonBytecode.py
+
+Translates the dict-based AST produced by parser.py into a Python
+code object (bytecode) via Python's `ast` module.
+
+Parser AST node shapes (all dicts with a "type" key):
+  FunctionDecl  : { type, returnType, name, params: [{type, name}], body: [...] }
+  VarDecl       : { type, varType, name, init }
+  ReturnStmt    : { type, expr }
+  ExprStmt      : { type, expr }
+  AssignExpr    : { type, left, right }
+  BinaryExpr    : { type, op: str (TokenType name), left, right }
+  UnaryExpr     : { type, op: str, expr }
+  NumberLiteral : { type, value: str }
+  Identifier    : { type, name: str }
+"""
+
 import ast
 import dis
-from types import CodeType
 
-class CppNode:
-    def __init__(self, kind, **kwargs):
-        self.kind = kind
-        self.__dict__.update(kwargs)
+
+# ---------------------------------------------------------------------------
+# Operator mappings
+# ---------------------------------------------------------------------------
+
+BINARY_OP_MAP = {
+    "PLUS":          ast.Add(),
+    "MINUS":         ast.Sub(),
+    "STAR":          ast.Mult(),
+    "SLASH":         ast.Div(),
+    "PERCENT":       ast.Mod(),
+    "EQUAL":         ast.Eq(),
+    "NOT_EQUAL":     ast.NotEq(),
+    "LESS":          ast.Lt(),
+    "LESS_EQUAL":    ast.LtE(),
+    "GREATER":       ast.Gt(),
+    "GREATER_EQUAL": ast.GtE(),
+    "AND":           ast.And(),
+    "OR":            ast.Or(),
+    "SHIFT_LEFT":    ast.LShift(),
+    "SHIFT_RIGHT":   ast.RShift(),
+    "BITWISE_AND":   ast.BitAnd(),
+    "BITWISE_OR":    ast.BitOr(),
+    "BITWISE_XOR":   ast.BitXor(),
+}
+
+UNARY_OP_MAP = {
+    "MINUS":       ast.USub(),
+    "PLUS":        ast.UAdd(),
+    "LOGICAL_NOT": ast.Not(),
+    "BITWISE_NOT": ast.Invert(),
+}
+
+# Comparison operators need ast.Compare, not ast.BinOp
+COMPARE_OPS = {"EQUAL", "NOT_EQUAL", "LESS", "LESS_EQUAL", "GREATER", "GREATER_EQUAL"}
+BOOL_OPS    = {"AND", "OR"}
+
+
+# ---------------------------------------------------------------------------
+# Translator
+# ---------------------------------------------------------------------------
 
 class CppToPythonBytecode:
-    def __init__(self, cpp_ast_root):
-        self.root = cpp_ast_root
-        self.env = {}            # maps C++ identifiers -> Python names
-        self.indent = 0          # debug printing indent
+    """
+    Translates a list of parser AST dicts into a compiled Python code object.
 
-    def debug(self, msg):
-        print("  " * self.indent + msg)
+    Usage:
+        from scanner import Scanner
+        from parser  import Parser
+        from CppToPythonBytecode import CppToPythonBytecode
 
-    def compile(self):
-        py_ast = self.translate(self.root)
-        py_module = ast.Module(body=[py_ast], type_ignores=[])
-        ast.fix_missing_locations(py_module)
-        code_obj = compile(py_module, "<cpp_interpreter>", "exec")
-        return code_obj
+        tokens     = Scanner(source).scan()
+        ast_nodes  = Parser(tokens).parse()          # list of dicts
+        translator = CppToPythonBytecode(ast_nodes)
+        code_obj   = translator.compile()
+        exec(code_obj)
+    """
 
-    def translate(self, node):
-        self.debug(f"Translating node: {node.kind}")
-        self.indent += 1
+    def __init__(self, parser_ast: list, debug: bool = False):
+        """
+        Parameters
+        ----------
+        parser_ast : list
+            The list of top-level AST dicts returned by ``Parser.parse()``.
+        debug : bool
+            When True, print each node as it is translated.
+        """
+        self.ast_nodes = parser_ast
+        self._debug    = debug
 
-        if node.kind == "FunctionDecl":
-            args = ast.arguments(
-                posonlyargs=[],
-                args=[ast.arg(arg=name) for name in node.params],
-                kwonlyargs=[],
-                defaults=[]
-            )
-            body = [self.translate(stmt) for stmt in node.body]
-            fn = ast.FunctionDef(
-                name=node.name,
-                args=args,
-                body=body,
-                decorator_list=[]
-            )
-            self.indent -= 1
-            return fn
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-        elif node.kind == "VarDecl":
-            target = ast.Name(id=node.name, ctx=ast.Store())
-            value = self.translate(node.value)
-            assign = ast.Assign(targets=[target], value=value)
-            self.env[node.name] = node.name
-            self.indent -= 1
-            return assign
-
-        elif node.kind == "ReturnStmt":
-            val = self.translate(node.expr)
-            ret = ast.Return(value=val)
-            self.indent -= 1
-            return ret
-
-        elif node.kind == "BinaryOperator":
-            op_map = {
-                "+": ast.Add(),
-                "-": ast.Sub(),
-                "*": ast.Mult(),
-                "/": ast.Div()
-            }
-            py_op = op_map.get(node.op)
-            left = self.translate(node.left)
-            right = self.translate(node.right)
-            expr = ast.BinOp(left=left, op=py_op, right=right)
-            self.indent -= 1
-            return expr
-
-        elif node.kind == "IntegerLiteral":
-            const = ast.Constant(value=node.value)
-            self.indent -= 1
-            return const
-
-        elif node.kind == "Identifier":
-            name = ast.Name(id=node.spelling, ctx=ast.Load())
-            self.indent -= 1
-            return name
-
-        elif node.kind == "CallExpr":
-            func = ast.Name(id=node.callee, ctx=ast.Load())
-            args = [self.translate(a) for a in node.args]
-            call = ast.Call(func=func, args=args, keywords=[])
-            self.indent -= 1
-            return call
-
-        else:
-            self.indent -= 1
-            raise NotImplementedError(f"Unsupported C++ AST node: {node.kind}")
+    def compile(self) -> "code":
+        """Return a Python code object ready for ``exec()``."""
+        body = [self._translate(node) for node in self.ast_nodes]
+        module = ast.Module(body=body, type_ignores=[])
+        ast.fix_missing_locations(module)
+        return compile(module, "<cpp_transpiler>", "exec")
 
     def dump_python_ast(self):
-        py_ast = self.translate(self.root)
-        print(ast.dump(py_ast, indent=2))
+        """Pretty-print the generated Python AST (useful for debugging)."""
+        body = [self._translate(node) for node in self.ast_nodes]
+        module = ast.Module(body=body, type_ignores=[])
+        ast.fix_missing_locations(module)
+        print(ast.dump(module, indent=2))
+
+    def dump_bytecode(self):
+        """Disassemble the generated bytecode to stdout."""
+        dis.dis(self.compile())
+
+    # ------------------------------------------------------------------
+    # Internal translation dispatcher
+    # ------------------------------------------------------------------
+
+    def _translate(self, node):
+        if node is None:
+            return ast.Constant(value=None)
+
+        node_type = node.get("type")
+        if self._debug:
+            print(f"[translate] {node_type}")
+
+        handler = getattr(self, f"_translate_{node_type}", None)
+        if handler is None:
+            raise NotImplementedError(
+                f"No translation handler for parser node type: '{node_type}'\n"
+                f"Node contents: {node}"
+            )
+        return handler(node)
+
+    # ------------------------------------------------------------------
+    # Statement handlers (return ast.stmt subclasses)
+    # ------------------------------------------------------------------
+
+    def _translate_FunctionDecl(self, node):
+        """{ type, returnType, name, params: [{type, name}], body: [...] }"""
+        args = ast.arguments(
+            posonlyargs=[],
+            args=[ast.arg(arg=p["name"]) for p in node.get("params", [])],
+            vararg=None,
+            kwonlyargs=[],
+            kw_defaults=[],
+            kwarg=None,
+            defaults=[],
+        )
+
+        raw_body = [self._translate(stmt) for stmt in node.get("body", [])]
+        # A Python function body must not be empty
+        body = raw_body if raw_body else [ast.Pass()]
+
+        return ast.FunctionDef(
+            name=node["name"],
+            args=args,
+            body=body,
+            decorator_list=[],
+            returns=None,
+        )
+
+    def _translate_VarDecl(self, node):
+        """{ type, varType, name, init }"""
+        target = ast.Name(id=node["name"], ctx=ast.Store())
+        value  = self._translate(node["init"]) if node.get("init") else ast.Constant(value=None)
+        return ast.Assign(targets=[target], value=value)
+
+    def _translate_ReturnStmt(self, node):
+        """{ type, expr }"""
+        value = self._translate(node["expr"]) if node.get("expr") else None
+        return ast.Return(value=value)
+
+    def _translate_ExprStmt(self, node):
+        """{ type, expr }"""
+        expr_node = self._translate(node["expr"])
+        # Wrap expression in Expr statement if it isn't already a statement
+        if isinstance(expr_node, ast.expr):
+            return ast.Expr(value=expr_node)
+        # AssignExpr translates directly to ast.Assign (a statement)
+        return expr_node
+
+    # ------------------------------------------------------------------
+    # Expression handlers (return ast.expr subclasses, or ast.Assign)
+    # ------------------------------------------------------------------
+
+    def _translate_AssignExpr(self, node):
+        """{ type, left, right }  →  ast.Assign (statement-level)"""
+        left  = node["left"]
+        # Only simple identifier targets are supported at this level
+        if left.get("type") != "Identifier":
+            raise NotImplementedError(
+                f"Assignment to non-identifier target is not supported: {left}"
+            )
+        target = ast.Name(id=left["name"], ctx=ast.Store())
+        value  = self._translate(node["right"])
+        return ast.Assign(targets=[target], value=value)
+
+    def _translate_BinaryExpr(self, node):
+        """{ type, op: TokenType name string, left, right }"""
+        op_name = node["op"]
+        left    = self._translate(node["left"])
+        right   = self._translate(node["right"])
+
+        if op_name in COMPARE_OPS:
+            return ast.Compare(
+                left=left,
+                ops=[BINARY_OP_MAP[op_name]],
+                comparators=[right],
+            )
+
+        if op_name in BOOL_OPS:
+            return ast.BoolOp(
+                op=BINARY_OP_MAP[op_name],
+                values=[left, right],
+            )
+
+        py_op = BINARY_OP_MAP.get(op_name)
+        if py_op is None:
+            raise NotImplementedError(f"Unsupported binary operator: '{op_name}'")
+
+        return ast.BinOp(left=left, op=py_op, right=right)
+
+    def _translate_UnaryExpr(self, node):
+        """{ type, op: TokenType name string, expr }"""
+        op_name = node["op"]
+        operand = self._translate(node["expr"])
+        py_op   = UNARY_OP_MAP.get(op_name)
+        if py_op is None:
+            raise NotImplementedError(f"Unsupported unary operator: '{op_name}'")
+        return ast.UnaryOp(op=py_op, operand=operand)
+
+    def _translate_NumberLiteral(self, node):
+        """{ type, value: str }  — scanner always yields numeric strings"""
+        raw = node["value"]
+        # Convert to int or float
+        try:
+            value = int(raw)
+        except ValueError:
+            value = float(raw)
+        return ast.Constant(value=value)
+
+    def _translate_Identifier(self, node):
+        """{ type, name: str }"""
+        return ast.Name(id=node["name"], ctx=ast.Load())
+
+
+# ---------------------------------------------------------------------------
+# Convenience entry-point
+# ---------------------------------------------------------------------------
+
+def transpile(source_code: str, debug: bool = False) -> "code":
+    """
+    Full pipeline: C++ source string → executable Python code object.
+
+    Parameters
+    ----------
+    source_code : str
+        Raw C++ source text.
+    debug : bool
+        Enable debug output in the translator.
+
+    Returns
+    -------
+    code
+        A Python code object that can be executed with ``exec()``.
+
+    Example
+    -------
+        code_obj = transpile('int add(int a, int b) { return a + b; }')
+        exec(code_obj)
+        # 'add' is now available in the global namespace
+    """
+    from scanner import Scanner
+    from parser  import Parser
+
+    tokens    = Scanner(source_code).scan()
+    ast_nodes = Parser(tokens).parse()
+    return CppToPythonBytecode(ast_nodes, debug=debug).compile()
+
+
+# ---------------------------------------------------------------------------
+# CLI smoke-test
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import sys
+
+    sample = """
+int add(int a, int b) {
+    return a + b;
+}
+
+int main() {
+    int x;
+    x = 3 + 4;
+    return x;
+}
+"""
+    source = sample
+    if len(sys.argv) == 2:
+        with open(sys.argv[1]) as f:
+            source = f.read()
+
+    print("=== Parser AST ===")
+    from scanner import Scanner
+    from parser  import Parser
+    tokens = Scanner(source).scan()
+    nodes  = Parser(tokens).parse()
+    import json
+    print(json.dumps(nodes, indent=2, default=str))
+
+    print("\n=== Python AST dump ===")
+    translator = CppToPythonBytecode(nodes, debug=True)
+    translator.dump_python_ast()
+
+    print("\n=== Bytecode disassembly ===")
+    translator2 = CppToPythonBytecode(nodes)
+    translator2.dump_bytecode()
+
+    print("\n=== exec() test ===")
+    code_obj = CppToPythonBytecode(nodes).compile()
+    ns = {}
+    exec(code_obj, ns)
+    if "add" in ns:
+        print(f"add(3, 4)  = {ns['add'](3, 4)}")
+        print(f"add(10, 5) = {ns['add'](10, 5)}")
