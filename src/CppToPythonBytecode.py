@@ -95,7 +95,13 @@ class CppToPythonBytecode:
 
     def compile(self) -> "code":
         """Return a Python code object ready for ``exec()``."""
-        body = [self._translate(node) for node in self.ast_nodes]
+        body = []
+        for node in self.ast_nodes:
+            translated = self._translate(node)
+            if isinstance(translated, list):
+                body.extend(translated)
+            else:
+                body.append(translated)
         module = ast.Module(body=body, type_ignores=[])
         ast.fix_missing_locations(module)
         return compile(module, "<cpp_transpiler>", "exec")
@@ -147,9 +153,14 @@ class CppToPythonBytecode:
             defaults=[],
         )
 
-        raw_body = [self._translate(stmt) for stmt in node.get("body", [])]
-        # A Python function body must not be empty
-        body = raw_body if raw_body else [ast.Pass()]
+        raw_body = []
+        for stmt in node.get("body", []):
+            translated = self._translate(stmt)
+            if isinstance(translated, list):
+                raw_body.extend(translated)
+            else:
+                raw_body.append(translated)        # A Python function body must not be empty
+                body = raw_body if raw_body else [ast.Pass()]
 
         return ast.FunctionDef(
             name=node["name"],
@@ -157,6 +168,16 @@ class CppToPythonBytecode:
             body=body,
             decorator_list=[],
             returns=None,
+        )
+    
+    def _translate_WhileStmt(self, node):
+        test = self._translate(node["condition"])
+        body = [self._translate(stmt) for stmt in node["body"]]
+
+        return ast.While(
+            test=test,
+            body=body if body else [ast.Pass()],
+            orelse=[]
         )
 
     def _translate_VarDecl(self, node):
@@ -242,7 +263,82 @@ class CppToPythonBytecode:
     def _translate_Identifier(self, node):
         """{ type, name: str }"""
         return ast.Name(id=node["name"], ctx=ast.Load())
+    
+    def _translate_IfStmt(self, node):
+        condition = self._translate(node["condition"])
 
+        then_body = [self._translate(stmt) for stmt in node.get("then", [])]
+        else_body = [self._translate(stmt) for stmt in node.get("else", [])] if node.get("else") else []
+
+        return ast.If(
+            test=condition,
+            body=then_body if then_body else [ast.Pass()],
+            orelse=else_body
+        )
+    
+    def _translate_ForStmt(self, node):
+        stmts = []
+
+        # 1. init (runs once before loop)
+        if node.get("init"):
+            init_node = self._translate(node["init"])
+            if isinstance(init_node, list):
+                stmts.extend(init_node)
+            else:
+                stmts.append(init_node)
+
+        # 2. condition
+        condition = self._translate(node["condition"]) if node.get("condition") else ast.Constant(value=True)
+
+        # 3. body
+        body = [self._translate(stmt) for stmt in node.get("body", [])]
+
+        # 4. update (runs at end of each loop)
+        if node.get("update"):
+            update_node = self._translate(node["update"])
+            if isinstance(update_node, ast.expr):
+                update_node = ast.Expr(value=update_node)
+            body.append(update_node)
+
+        while_node = ast.While(
+            test=condition,
+            body=body if body else [ast.Pass()],
+            orelse=[]
+        )
+
+        stmts.append(while_node)
+
+        return stmts
+    
+    def _translate_UpdateExpr(self, node):
+        target = node["expr"]
+
+        if target["type"] != "Identifier":
+            raise NotImplementedError("++/-- only supported on identifiers")
+
+        name = target["name"]
+
+        # i = i + 1 or i = i - 1
+        op = ast.Add() if node["op"] == "INCREMENT" else ast.Sub()
+
+        return ast.Assign(
+            targets=[ast.Name(id=name, ctx=ast.Store())],
+            value=ast.BinOp(
+                left=ast.Name(id=name, ctx=ast.Load()),
+                op=op,
+                right=ast.Constant(value=1)
+            )
+        )
+
+    def _translate_CallExpr(self, node):
+        func = ast.Name(id=node["callee"], ctx=ast.Load())
+        args = [self._translate(arg) for arg in node.get("args", [])]
+
+        return ast.Call(
+            func=func,
+            args=args,
+            keywords=[]
+        )
 
 # ---------------------------------------------------------------------------
 # Convenience entry-point
