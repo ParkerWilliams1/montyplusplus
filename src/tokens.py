@@ -35,40 +35,37 @@ class TokenType(Enum):
     LESS_EQUAL = auto()
     GREATER = auto()
     GREATER_EQUAL = auto()
-    SHIFT_LEFT = auto()      # <<
-    SHIFT_RIGHT = auto()     # >>
-    AND = auto()             # &&
-    OR = auto()              # ||
-    BITWISE_AND = auto()     # &
-    BITWISE_OR = auto()      # |
-    BITWISE_XOR = auto()     # ^
-    BITWISE_NOT = auto()     # ~
-    LOGICAL_NOT = auto()     # !
-    INCREMENT = auto()       # ++
-    DECREMENT = auto()       # --
-    QUESTION = auto()        # ?
-    ARROW = auto()           # ->
+    SHIFT_LEFT = auto()
+    SHIFT_RIGHT = auto()
+    AND = auto()
+    OR = auto()
+    BITWISE_AND = auto()
+    BITWISE_OR = auto()
+    BITWISE_XOR = auto()
+    BITWISE_NOT = auto()
+    LOGICAL_NOT = auto()
+    INCREMENT = auto()
+    DECREMENT = auto()
+    QUESTION = auto()
+    ARROW = auto()
 
     # Punctuation
-    LPAREN = auto()          # (
-    RPAREN = auto()          # )
-    LBRACE = auto()          # {
-    RBRACE = auto()          # }
-    LBRACKET = auto()        # [
-    RBRACKET = auto()        # ]
-    SEMICOLON = auto()       # ;
+    LPAREN = auto()
+    RPAREN = auto()
+    LBRACE = auto()
+    RBRACE = auto()
+    LBRACKET = auto()
+    RBRACKET = auto()
+    SEMICOLON = auto()
     COMMA = auto()
-    SCOPE = auto()           # ::
+    SCOPE = auto()
     COLON = auto()
-    HASH = auto()            # #
-    DOT = auto()             # .
+    HASH = auto()
+    DOT = auto()
 
     # End of file
     EOF = auto()
 
-# ----------------------------
-# Token Class
-# ----------------------------
 class Token:
     def __init__(self, type_, value, line, column):
         self.type = type_

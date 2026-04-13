@@ -3,10 +3,6 @@ import sys
 import os
 from tokens import TokenType, Token
 
-
-# ----------------------------
-# Scanner Class
-# ----------------------------
 class Scanner:
     KEYWORDS = {
         "int": TokenType.INT,
@@ -17,25 +13,76 @@ class Scanner:
         "for": TokenType.FOR,
         "void": TokenType.VOID,
         "include": TokenType.INCLUDE,
+        "bool": TokenType.BOOL,
+        "char": TokenType.CHAR,
+        "float": TokenType.FLOAT,
+        "long": TokenType.INT,     # treat long as int
+        "short": TokenType.INT,    # treat short as int
+        "true": TokenType.NUMBER,  # bool literals handled as numbers for now
+        "false": TokenType.NUMBER,
+        "struct": TokenType.IDENTIFIER,
+        "class": TokenType.IDENTIFIER,
+        "public": TokenType.IDENTIFIER,
+        "private": TokenType.IDENTIFIER,
+        "new": TokenType.IDENTIFIER,
+        "delete": TokenType.IDENTIFIER,
+        "nullptr": TokenType.IDENTIFIER,
+        "null": TokenType.IDENTIFIER,
+        "break": TokenType.IDENTIFIER,
+        "continue": TokenType.IDENTIFIER,
+        "string": TokenType.IDENTIFIER,
+        "vector": TokenType.IDENTIFIER,
+        "map": TokenType.IDENTIFIER,
+        "unordered_map": TokenType.IDENTIFIER,
+        "set": TokenType.IDENTIFIER,
+        "unordered_set": TokenType.IDENTIFIER,
+        "pair": TokenType.IDENTIFIER,
+        "stack": TokenType.IDENTIFIER,
+        "queue": TokenType.IDENTIFIER,
+        "deque": TokenType.IDENTIFIER,
+        "priority_queue": TokenType.IDENTIFIER,
+        "list": TokenType.IDENTIFIER,
+        "max": TokenType.IDENTIFIER,
+        "min": TokenType.IDENTIFIER,
+        "abs": TokenType.IDENTIFIER,
+        "sort": TokenType.IDENTIFIER,
+        "size": TokenType.IDENTIFIER,
+        "push_back": TokenType.IDENTIFIER,
+        "pop_back": TokenType.IDENTIFIER,
+        "push": TokenType.IDENTIFIER,
+        "pop": TokenType.IDENTIFIER,
+        "top": TokenType.IDENTIFIER,
+        "front": TokenType.IDENTIFIER,
+        "back": TokenType.IDENTIFIER,
+        "begin": TokenType.IDENTIFIER,
+        "end": TokenType.IDENTIFIER,
+        "find": TokenType.IDENTIFIER,
+        "count": TokenType.IDENTIFIER,
+        "empty": TokenType.IDENTIFIER,
+        "clear": TokenType.IDENTIFIER,
+        "insert": TokenType.IDENTIFIER,
+        "erase": TokenType.IDENTIFIER,
+        "swap": TokenType.IDENTIFIER,
+        "reverse": TokenType.IDENTIFIER,
+        "resize": TokenType.IDENTIFIER,
+        "reserve": TokenType.IDENTIFIER,
+        "at": TokenType.IDENTIFIER,
+        "substr": TokenType.IDENTIFIER,
+        "length": TokenType.IDENTIFIER,
+        "INT_MAX": TokenType.NUMBER,
+        "INT_MIN": TokenType.NUMBER,
     }
 
     TOKEN_REGEX = [
-        # Whitespace and comments
-        (r'[ \t\n]+', None),        # Skip whitespace including newlines
-        (r'//[^\n]*', None),        # Skip single-line comments
-        (r'/\*.*?\*/', None),       # Skip multi-line comments
-
-        # Preprocessor directives
-        (r'#include', TokenType.HASH),
-        (r'#', TokenType.HASH),
-
-        # Numbers
+        (r'[ \t\n]+', None),
+        (r'//[^\n]*', None),
+        (r'/\*.*?\*/', None),
+        (r'#include\s*[<"][^>"]*[>"]', None),  # skip includes
+        (r'#[^\n]*', None),                     # skip other preprocessor
+        (r'\d+\.\d+', TokenType.NUMBER),        # float literals
         (r'\d+', TokenType.NUMBER),
-
-        # Strings (handles escaped quotes)
         (r'"([^"\\]|\\.)*"', TokenType.STRING),
-
-        # Multi-character operators (must come before single-character ones)
+        (r"'([^'\\]|\\.)'", TokenType.CHAR),
         (r'<<', TokenType.SHIFT_LEFT),
         (r'>>', TokenType.SHIFT_RIGHT),
         (r'<=', TokenType.LESS_EQUAL),
@@ -47,8 +94,10 @@ class Scanner:
         (r'\+\+', TokenType.INCREMENT),
         (r'--', TokenType.DECREMENT),
         (r'->', TokenType.ARROW),
-
-        # Single-character operators and punctuation
+        (r'\+=', TokenType.ASSIGN),   # treat += as special assign
+        (r'-=', TokenType.ASSIGN),
+        (r'\*=', TokenType.ASSIGN),
+        (r'/=', TokenType.ASSIGN),
         (r'\+', TokenType.PLUS),
         (r'-', TokenType.MINUS),
         (r'\*', TokenType.STAR),
@@ -63,8 +112,6 @@ class Scanner:
         (r'~', TokenType.BITWISE_NOT),
         (r'!', TokenType.LOGICAL_NOT),
         (r'\?', TokenType.QUESTION),
-
-        # Punctuation and brackets
         (r'::', TokenType.SCOPE),
         (r'\(', TokenType.LPAREN),
         (r'\)', TokenType.RPAREN),
@@ -76,8 +123,6 @@ class Scanner:
         (r',', TokenType.COMMA),
         (r':', TokenType.COLON),
         (r'\.', TokenType.DOT),
-
-        # Identifiers
         (r'[A-Za-z_][A-Za-z0-9_]*', TokenType.IDENTIFIER),
     ]
 
@@ -96,10 +141,7 @@ class Scanner:
                 match = regex.match(self.source, pos)
                 if match:
                     text = match.group(0)
-
-                    # Skip whitespace and comments
                     if token_type is None:
-                        # Still update line/column for skipped content
                         newlines = text.count('\n')
                         if newlines > 0:
                             self.line += newlines
@@ -109,32 +151,36 @@ class Scanner:
                         pos = match.end(0)
                         break
 
-                    # Handle preprocessor directives specially
-                    if token_type == TokenType.HASH and text == '#include':
-                        self.tokens.append(Token(TokenType.HASH, text, self.line, self.column))
-                    else:
-                        # If identifier is actually a keyword, upgrade its type
-                        if token_type == TokenType.IDENTIFIER and text in self.KEYWORDS:
-                            actual_type = self.KEYWORDS[text]
+                    if token_type == TokenType.IDENTIFIER and text in self.KEYWORDS:
+                        actual_type = self.KEYWORDS[text]
+                        # Special handling for bool literals
+                        if text == 'true':
+                            self.tokens.append(Token(TokenType.NUMBER, '1', self.line, self.column))
+                        elif text == 'false':
+                            self.tokens.append(Token(TokenType.NUMBER, '0', self.line, self.column))
+                        elif text == 'nullptr' or text == 'null':
+                            self.tokens.append(Token(TokenType.NUMBER, '0', self.line, self.column))
+                        elif text == 'INT_MAX':
+                            self.tokens.append(Token(TokenType.NUMBER, '2147483647', self.line, self.column))
+                        elif text == 'INT_MIN':
+                            self.tokens.append(Token(TokenType.NUMBER, '-2147483648', self.line, self.column))
+                        elif text in ('break', 'continue'):
+                            self.tokens.append(Token(TokenType.IDENTIFIER, text, self.line, self.column))
                         else:
-                            actual_type = token_type
+                            self.tokens.append(Token(actual_type, text, self.line, self.column))
+                    else:
+                        self.tokens.append(Token(token_type, text, self.line, self.column))
 
-                        self.tokens.append(Token(actual_type, text, self.line, self.column))
-
-                    # Update line/column positions
                     newlines = text.count('\n')
                     if newlines > 0:
                         self.line += newlines
-                        # Reset column after last newline
                         self.column = len(text) - text.rfind('\n')
                     else:
                         self.column += len(text)
-
                     pos = match.end(0)
                     break
 
             if not match:
-                # Show some context around the error
                 start = max(0, pos - 10)
                 end = min(len(self.source), pos + 10)
                 context = self.source[start:end]
@@ -143,54 +189,5 @@ class Scanner:
                     f"Context: ...{context}..."
                 )
 
-        # Add EOF token
         self.tokens.append(Token(TokenType.EOF, "", self.line, self.column))
         return self.tokens
-
-# ----------------------------
-# File Reading and Main Function
-# ----------------------------
-def read_cpp_file(filename):
-    """Read a C++ file and return its contents as a string"""
-    try:
-        with open(filename, 'r', encoding='utf-8') as file:
-            return file.read()
-    except FileNotFoundError:
-        print(f"Error: File '{filename}' not found.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error reading file: {e}")
-        sys.exit(1)
-
-def main():
-    if len(sys.argv) != 2:
-        print("Usage: python scanner.py <filename.cpp>")
-        sys.exit(1)
-    
-    filename = sys.argv[1]
-    
-    # Check file extension
-    if not filename.endswith(('.cpp', '.c', '.h', '.hpp', '.cc', '.cxx')):
-        print("Warning: This looks like it might not be a C/C++ file.")
-        response = input("Continue anyway? (y/n): ")
-        if response.lower() != 'y':
-            sys.exit(0)
-    
-    # Read the file
-    source_code = read_cpp_file(filename)
-    
-    # Scan the file
-    scanner = Scanner(source_code)
-    try:
-        tokens = scanner.scan()
-        
-        # Print tokens
-        print(f"Tokens from {filename}:")
-        print("-" * 50)
-        for token in tokens:
-            print(token)
-    except SyntaxError as e:
-        print(f"Syntax Error: {e}")
-
-if __name__ == "__main__":
-    main()
