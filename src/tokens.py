@@ -4,7 +4,6 @@ __all__ = ['Token', 'TokenType']
 
 
 class TokenType(Enum):
-    # Keywords
     INT = auto()
     RETURN = auto()
     IF = auto()
@@ -13,16 +12,12 @@ class TokenType(Enum):
     FOR = auto()
     VOID = auto()
     INCLUDE = auto()
-
-    # Identifiers and literals
     IDENTIFIER = auto()
     NUMBER = auto()
     STRING = auto()
     BOOL = auto()
     CHAR = auto()
     FLOAT = auto()
-
-    # Operators
     PLUS = auto()
     MINUS = auto()
     STAR = auto()
@@ -48,8 +43,6 @@ class TokenType(Enum):
     DECREMENT = auto()
     QUESTION = auto()
     ARROW = auto()
-
-    # Punctuation
     LPAREN = auto()
     RPAREN = auto()
     LBRACE = auto()
@@ -62,9 +55,9 @@ class TokenType(Enum):
     COLON = auto()
     HASH = auto()
     DOT = auto()
-
-    # End of file
+    ELLIPSIS = auto()
     EOF = auto()
+
 
 class Token:
     def __init__(self, type_, value, line, column):
