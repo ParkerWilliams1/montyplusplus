@@ -1,17 +1,5 @@
-"""
-CppToPythonBytecode.py (C++17 enhanced)
-
-Translates C++ parser AST dicts -> Python code object via `ast` module.
-Handles: functions, loops, arrays, vectors, maps, sets, method calls,
-         ternary, break/continue, member access, initializer lists,
-         range-for, switch/case, do-while, try/catch, lambdas,
-         enums, structured bindings, optional, variant, tuple,
-         smart pointers, algorithm functions, C++17 stdlib.
-"""
-
 import ast
 import dis
-
 
 BINARY_OP_MAP = {
     "PLUS":          ast.Add(),
@@ -53,6 +41,85 @@ import itertools
 import functools
 from collections import defaultdict, deque, OrderedDict
 from typing import Optional as _Optional
+
+# --- C++ I/O STREAM SUPPORT ---
+class _CoutStream:
+    def __lshift__(self, other):
+        if other == '\\n' or other == '\\r\\n':
+            print()
+        else:
+            try:
+                # C++ prints booleans as 0 or 1
+                if isinstance(other, bool):
+                    print(1 if other else 0, end='')
+                else:
+                    print(other, end='')
+            except Exception:
+                print(other, end='')
+        return self
+
+cout = _CoutStream()
+cerr = _CoutStream()
+
+_cin_tokens = None
+
+class _CinStream:
+    def __bool__(self):
+        global _cin_tokens
+        if _cin_tokens is None:
+            _cin_tokens = sys.stdin.read().split()
+            _cin_tokens.reverse()
+        return len(_cin_tokens) > 0
+
+cin = _CinStream()
+
+class _StdNamespace:
+    pass
+std = _StdNamespace()
+std.cout = cout
+std.cerr = cerr
+std.cin = cin
+std.endl = '\\n'
+
+def _cin_read(old_val=None):
+    global _cin_tokens
+    if _cin_tokens is None:
+        _cin_tokens = sys.stdin.read().split()
+        _cin_tokens.reverse()
+    if not _cin_tokens:
+        return None
+    token = _cin_tokens.pop()
+    
+    # Cast to the appropriate type based on variable's current value
+    if old_val is not None:
+        if isinstance(old_val, bool):
+            try: return bool(int(token))
+            except Exception: return bool(token)
+        elif isinstance(old_val, int):
+            return int(token)
+        elif isinstance(old_val, float):
+            return float(token)
+        elif isinstance(old_val, str):
+            return token
+            
+    # Fallback to guessing if variable was uninitialized
+    try: return int(token)
+    except ValueError:
+        try: return float(token)
+        except ValueError: return token
+
+def _set_item(obj, key, val):
+    if val is not None:
+        obj[key] = val
+        return True
+    return False
+
+def _set_attr(obj, attr, val):
+    if val is not None:
+        setattr(obj, attr, val)
+        return True
+    return False
+# ------------------------------
 
 def _cpp_vector(*args):
     if len(args) == 1 and isinstance(args[0], int):
@@ -677,6 +744,69 @@ class CppToPythonBytecode:
     def dump_bytecode(self):
         dis.dis(self.compile())
 
+    def _extract_cin_targets(self, node):
+        """Recursively unwraps `cin >> x >> y` and returns the target variables `[x, y]`."""
+        if node.get("type") == "Identifier" and node.get("name") in ("cin", "std::cin"):
+            return []
+        if node.get("type") == "MemberAccess":
+            obj = node.get("object")
+            if obj.get("type") == "Identifier" and obj.get("name") == "std" and node.get("member") == "cin":
+                return []
+        if node.get("type") == "BinaryExpr" and node.get("op") == "SHIFT_RIGHT":
+            left_targets = self._extract_cin_targets(node["left"])
+            if left_targets is None:
+                return None
+            return left_targets + [node["right"]]
+        return None
+
+    def _build_cin_expr(self, target_node):
+        """Builds Python AST expression that dynamically reads and assigns based on target type."""
+        if target_node.get("type") == "Identifier":
+            target_store = ast.Name(id=target_node["name"], ctx=ast.Store())
+            target_load = ast.Name(id=target_node["name"], ctx=ast.Load())
+            read_call = ast.Call(
+                func=ast.Name(id='_cin_read', ctx=ast.Load()),
+                args=[target_load],
+                keywords=[]
+            )
+            # Uses Python 3.8+ Walrus Operator (x := _cin_read(x))
+            named_expr = ast.NamedExpr(target=target_store, value=read_call)
+            return ast.Compare(
+                left=named_expr,
+                ops=[ast.IsNot()],
+                comparators=[ast.Constant(value=None)]
+            )
+        elif target_node.get("type") == "IndexExpr":
+            arr_ast = self._translate(target_node["array"])
+            idx_ast = self._translate(target_node["index"])
+            target_load = ast.Subscript(value=arr_ast, slice=idx_ast, ctx=ast.Load())
+            read_call = ast.Call(
+                func=ast.Name(id='_cin_read', ctx=ast.Load()),
+                args=[target_load],
+                keywords=[]
+            )
+            return ast.Call(
+                func=ast.Name(id='_set_item', ctx=ast.Load()),
+                args=[arr_ast, idx_ast, read_call],
+                keywords=[]
+            )
+        elif target_node.get("type") == "MemberAccess":
+            obj_ast = self._translate(target_node["object"])
+            member = target_node["member"]
+            target_load = ast.Attribute(value=obj_ast, attr=member, ctx=ast.Load())
+            read_call = ast.Call(
+                func=ast.Name(id='_cin_read', ctx=ast.Load()),
+                args=[target_load],
+                keywords=[]
+            )
+            return ast.Call(
+                func=ast.Name(id='_set_attr', ctx=ast.Load()),
+                args=[obj_ast, ast.Constant(value=member), read_call],
+                keywords=[]
+            )
+        else:
+            return ast.Constant(value=False)
+
     def _translate(self, node):
         if node is None:
             return None
@@ -903,13 +1033,6 @@ class CppToPythonBytecode:
             case = cases[idx]
             body = self._build_body(case.get("body", []))
 
-            has_break = any(
-                s is not None and isinstance(s, ast.stmt) and
-                (isinstance(s, ast.Break) or
-                 (isinstance(s, ast.Expr) and False))
-                for s in body
-            )
-
             filtered_body = [s for s in body if not isinstance(s, ast.Break)]
             if not filtered_body:
                 filtered_body = [ast.Pass()]
@@ -975,13 +1098,6 @@ class CppToPythonBytecode:
             ))
         if node.get("name"):
             self._enum_classes[node["name"]] = {e["name"]: e["value"] for e in node.get("enumerators", [])}
-            dict_entries = [
-                ast.Tuple(
-                    elts=[ast.Constant(value=e["name"]), ast.Constant(value=e["value"])],
-                    ctx=ast.Load()
-                )
-                for e in node.get("enumerators", [])
-            ]
             stmts.append(ast.Assign(
                 targets=[ast.Name(id=node["name"], ctx=ast.Store())],
                 value=ast.Dict(
@@ -1025,10 +1141,8 @@ class CppToPythonBytecode:
                 body[-1] = ast.Return(value=last.value)
             else:
                 body.append(ast.Return(value=ast.Constant(value=None)))
-        # Single-expression body → real ast.Lambda
         if len(body) == 1 and isinstance(body[0], ast.Return):
             return ast.Lambda(args=args, body=body[0].value)
-        # Multi-statement body → named inner function; caller must handle [FunctionDef, Name]
         return self._make_lambda_func(args, body)
 
     def _make_lambda_func(self, args, body):
@@ -1040,9 +1154,6 @@ class CppToPythonBytecode:
             decorator_list=[],
             returns=None,
         )
-        # Return an expression that is the name of the just-defined function.
-        # Callers embed this inside an ast.Expr or use it as a value; the
-        # FunctionDef is prepended separately in _translate_LambdaExpr.
         return ast.Name(id=func_name, ctx=ast.Load())
 
     def _translate_BreakContinueStmt(self, node):
@@ -1122,8 +1233,20 @@ class CppToPythonBytecode:
 
     def _translate_BinaryExpr(self, node):
         op_name = node["op"]
-        left    = self._translate(node["left"])
-        right   = self._translate(node["right"])
+
+        # Intercept cin >> x >> y...
+        if op_name == "SHIFT_RIGHT":
+            cin_targets = self._extract_cin_targets(node)
+            if cin_targets is not None:
+                conditions = [self._build_cin_expr(t) for t in cin_targets]
+                if not conditions:
+                    return ast.Constant(value=True)
+                if len(conditions) == 1:
+                    return conditions[0]
+                return ast.BoolOp(op=ast.And(), values=conditions)
+
+        left = self._translate(node["left"])
+        right = self._translate(node["right"])
 
         if op_name in COMPARE_OPS:
             return ast.Compare(left=left, ops=[BINARY_OP_MAP[op_name]], comparators=[right])
@@ -1242,9 +1365,13 @@ class CppToPythonBytecode:
             "M_E":      ast.Name(id="M_E", ctx=ast.Load()),
             "M_SQRT2":  ast.Name(id="M_SQRT2", ctx=ast.Load()),
             "endl":     ast.Constant(value="\n"),
-            "cin":      ast.Name(id="sys.stdin", ctx=ast.Load()),
-            "cout":     ast.Name(id="sys.stdout", ctx=ast.Load()),
-            "cerr":     ast.Name(id="sys.stderr", ctx=ast.Load()),
+            "std::endl":ast.Constant(value="\n"),
+            "cin":      ast.Name(id="cin", ctx=ast.Load()),
+            "cout":     ast.Name(id="cout", ctx=ast.Load()),
+            "cerr":     ast.Name(id="cerr", ctx=ast.Load()),
+            "std::cin": ast.Name(id="cin", ctx=ast.Load()),
+            "std::cout":ast.Name(id="cout", ctx=ast.Load()),
+            "std::cerr":ast.Name(id="cerr", ctx=ast.Load()),
             "EOF":      ast.Name(id="EOF_VAL", ctx=ast.Load()),
         }
         if name in special:
@@ -1663,7 +1790,7 @@ int main() {
     print("=== Parser AST ===")
     print(json.dumps(nodes, indent=2, default=str))
     t = CppToPythonBytecode(nodes, debug=True)
-    print("\n=== exec() test ===")
+    print("\\n=== exec() test ===")
     ns = {}
     exec(t.compile(), ns)
     if "add" in ns:
